@@ -79,7 +79,7 @@ jobs:
       - name: Download Latest Artifact
         uses: dawidd6/action-download-artifact@v3
         with:
-          workflow: ai-ci.yml
+          workflow: "AI Server CI"
           branch: main
           name: ai-server-*
           path: ./artifact
