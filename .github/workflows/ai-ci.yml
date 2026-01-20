@@ -4,8 +4,8 @@
 # 트리거 매트릭스:
 #   - PR feat/* → dev: lint, test
 #   - Push dev: lint, test, build
-#   - PR dev/hotfix/* → main: lint, test, build, artifact
-#   - Push main: lint, test, build, artifact
+#   - PR dev/hotfix/* → main: lint, test, build
+#   - Push main: artifact
 
 name: AI Server CI
 
@@ -77,14 +77,14 @@ jobs:
 
   # ============================================
   # Build
-  # dev push, main PR/push에서만 실행
+  # dev push, main PR에서만 실행 (main push 제외)
   # ============================================
   build:
     name: Build
     runs-on: ubuntu-22.04
     needs: test
     if: |
-      (github.event_name == 'push') ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/dev') ||
       (github.event_name == 'pull_request' && github.base_ref == 'main')
     steps:
       - name: Checkout
@@ -109,15 +109,13 @@ jobs:
 
   # ============================================
   # Upload Artifact
-  # main PR/push에서만 실행
+  # main push에서만 실행
   # ============================================
   artifact:
     name: Upload Artifact
     runs-on: ubuntu-22.04
-    needs: build
-    if: |
-      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
-      (github.event_name == 'pull_request' && github.base_ref == 'main')
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
