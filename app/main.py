@@ -18,9 +18,7 @@ def gpu_status():
                 "cuda_available": True,
                 "device_name": torch.cuda.get_device_name(0),
                 "device_count": torch.cuda.device_count(),
-                "memory_total_gb": round(
-                    torch.cuda.get_device_properties(0).total_memory / 1e9, 2
-                ),
+                "memory_total_gb": round(torch.cuda.get_device_properties(0).total_memory / 1e9, 2),
             }
         return {"cuda_available": False}
     except ImportError:
