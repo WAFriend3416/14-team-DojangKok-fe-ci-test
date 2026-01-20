@@ -12,8 +12,16 @@ name: AI Server CI
 on:
   push:
     branches: [main, dev]
+    paths-ignore:
+      - '.github/workflows/**'
+      - '**.md'
+      - 'docs/**'
   pull_request:
     branches: [main, dev]
+    paths-ignore:
+      - '.github/workflows/**'
+      - '**.md'
+      - 'docs/**'
 
 env:
   PYTHON_VERSION: "3.10"

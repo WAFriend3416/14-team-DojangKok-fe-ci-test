@@ -77,13 +77,28 @@ jobs:
           project_id: ${{ env.GCP_PROJECT_ID }}
 
       - name: Download Latest Artifact
-        uses: dawidd6/action-download-artifact@v3
-        with:
-          workflow: "AI Server CI"
-          branch: main
-          name: ai-server-*
-          path: ./artifact
-          search_artifacts: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # 최신 성공한 CI run에서 artifact 다운로드
+          mkdir -p ./artifact
+
+          # main 브랜치의 최신 성공한 워크플로우 실행 찾기
+          RUN_ID=$(gh run list \
+            --workflow="AI Server CI" \
+            --branch=main \
+            --status=success \
+            --limit=1 \
+            --json databaseId \
+            --jq '.[0].databaseId')
+
+          if [ -z "$RUN_ID" ]; then
+            echo "No successful CI run found"
+            exit 1
+          fi
+
+          echo "Downloading artifact from run: $RUN_ID"
+          gh run download "$RUN_ID" --dir ./artifact
 
       - name: Find Artifact File
         id: artifact
