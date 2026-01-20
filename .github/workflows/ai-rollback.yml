@@ -1,0 +1,158 @@
+# AI Server Rollback Workflow
+# 위치: .github/workflows/ai-rollback.yml
+#
+# 트리거: 수동 (workflow_dispatch)
+# 목적: 특정 CI run의 artifact로 롤백
+
+name: AI Server Rollback
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: '롤백할 CI Run ID (gh run list로 확인)'
+        required: true
+        type: string
+      confirm:
+        description: '롤백을 진행하시겠습니까? (yes 입력)'
+        required: true
+        type: string
+
+env:
+  GCP_PROJECT_ID: "fiery-topic-483322-b2"
+  GCP_ZONE: "asia-northeast3-b"
+  GCP_INSTANCE: "ai-server"
+  WORKLOAD_IDENTITY_PROVIDER: "projects/7174586152/locations/global/workloadIdentityPools/github-pool/providers/github-provider"
+  SERVICE_ACCOUNT: "github-actions-sa@fiery-topic-483322-b2.iam.gserviceaccount.com"
+
+jobs:
+  # ============================================
+  # Validation
+  # ============================================
+  validate:
+    name: Validate Input
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Check Confirmation
+        if: ${{ github.event.inputs.confirm != 'yes' }}
+        run: |
+          echo "롤백이 취소되었습니다. 'yes'를 입력해주세요."
+          exit 1
+
+      - name: Validate Run ID
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if ! [[ "${{ github.event.inputs.run_id }}" =~ ^[0-9]+$ ]]; then
+            echo "유효하지 않은 Run ID입니다."
+            exit 1
+          fi
+          echo "Run ID: ${{ github.event.inputs.run_id }}"
+
+  # ============================================
+  # Rollback
+  # ============================================
+  rollback:
+    name: Rollback to Previous Version
+    runs-on: ubuntu-22.04
+    needs: validate
+    permissions:
+      contents: read
+      id-token: write
+      actions: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to GCP (OIDC)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ env.WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ env.SERVICE_ACCOUNT }}
+
+      - name: Setup gcloud CLI
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+
+      - name: Download Artifact from Specified Run
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p ./artifact
+
+          echo "Downloading artifact from run: ${{ github.event.inputs.run_id }}"
+          gh run download ${{ github.event.inputs.run_id }} --dir ./artifact
+
+          # artifact 확인
+          ARTIFACT_FILE=$(find ./artifact -name "*.tar.gz" | head -1)
+          if [ -z "$ARTIFACT_FILE" ]; then
+            echo "Artifact not found in run ${{ github.event.inputs.run_id }}"
+            exit 1
+          fi
+          echo "Artifact found: $ARTIFACT_FILE"
+          echo "ARTIFACT_FILE=$ARTIFACT_FILE" >> $GITHUB_ENV
+
+      - name: Upload Artifact to VM
+        run: |
+          gcloud compute scp ${{ env.ARTIFACT_FILE }} \
+            ${{ env.GCP_INSTANCE }}:/tmp/ai-server-rollback.tar.gz \
+            --zone=${{ env.GCP_ZONE }}
+
+      - name: Rollback on VM
+        run: |
+          gcloud compute ssh ${{ env.GCP_INSTANCE }} \
+            --zone=${{ env.GCP_ZONE }} \
+            --command='
+              set -e
+
+              echo "=== Rollback Started ==="
+
+              # 현재 버전 백업 (롤백 전)
+              BACKUP_DIR="/app/ai-server-backup-rollback-$(date +%Y%m%d%H%M%S)"
+              if [ -d "/app/ai-server" ]; then
+                sudo cp -r /app/ai-server "$BACKUP_DIR"
+                echo "Current version backed up: $BACKUP_DIR"
+              fi
+
+              # 서비스 중단
+              sudo systemctl stop ai-server || true
+              echo "Service stopped"
+
+              # 롤백 배포
+              sudo rm -rf /app/ai-server
+              sudo mkdir -p /app/ai-server
+              sudo tar -xzf /tmp/ai-server-rollback.tar.gz -C /app/ai-server
+              sudo chown -R jsh:jsh /app/ai-server
+              echo "Rollback deployed"
+
+              # 서비스 시작
+              sudo systemctl start ai-server
+              echo "Service started"
+
+              # 임시 파일 정리
+              rm -f /tmp/ai-server-rollback.tar.gz
+
+              echo "=== Rollback Completed ==="
+            '
+
+      - name: Health Check
+        run: |
+          EXTERNAL_IP=$(gcloud compute instances describe ${{ env.GCP_INSTANCE }} \
+            --zone=${{ env.GCP_ZONE }} \
+            --format='get(networkInterfaces[0].accessConfigs[0].natIP)')
+
+          echo "Health check: http://$EXTERNAL_IP:8000/health"
+
+          for i in {1..12}; do
+            if curl -s -f "http://$EXTERNAL_IP:8000/health" > /dev/null; then
+              echo "Health check passed"
+              curl -s "http://$EXTERNAL_IP:8000/health"
+              exit 0
+            fi
+            echo "Attempt $i/12 - Waiting..."
+            sleep 5
+          done
+
+          echo "Health check failed"
+          exit 1
