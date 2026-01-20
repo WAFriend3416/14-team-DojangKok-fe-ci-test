@@ -5,7 +5,7 @@ app = FastAPI(title="AI Server")
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    return {"status": "ok", "message": "CI/CD test success!"}
 
 
 @app.get("/gpu")
